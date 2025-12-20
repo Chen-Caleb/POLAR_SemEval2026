@@ -1,0 +1,19 @@
+# Python 字节码
+__pycache__/
+*.py[cod]
+*.class
+
+# 环境与依赖
+.venv/
+env/
+venv/
+.env
+
+# 竞赛核心：严禁上传到 GitHub 的目录
+data/
+checkpoints/
+logs/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
