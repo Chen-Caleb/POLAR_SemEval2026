@@ -1,0 +1,15 @@
+model:
+  backbone: "xlm-roberta-base"
+  num_labels: 1          # Subtask 1 是二分类，输出一个连续值
+  max_length: 128
+
+train:
+  batch_size: 8          # 适配 Colab T4 显存
+  learning_rate: 2e-5
+  epochs: 3
+  seed: 42               # 🚀 修复之前的 KeyError: 'seed'
+  output_dir: "checkpoints/st1_baseline"
+
+data:
+  train_file: "data/processed/train_joint.jsonl"
+  val_split: 0.1
