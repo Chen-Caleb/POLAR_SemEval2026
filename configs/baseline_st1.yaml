@@ -1,6 +1,6 @@
 model:
   backbone: "xlm-roberta-base"
-  num_labels: 1          # Subtask 1 是二分类，输出一个连续值
+  num_labels: 2         # Subtask 1 是二分类，输出一个连续值
   max_length: 128
 
 train:

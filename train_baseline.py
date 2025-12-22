@@ -7,17 +7,18 @@ from transformers import (
     AutoModelForSequenceClassification,
     Trainer,
     TrainingArguments,
-    set_seed
+    set_seed, EarlyStoppingCallback
 )
 from src.dataset.polar_dataset import PolarDataset
 
 
 def compute_metrics(eval_pred):
-    """计算 Subtask 1 的核心指标：Macro F1"""
+    """🚀 修正：适配 2 个输出节点的分类指标计算"""
     logits, labels = eval_pred
-    # 将模型输出的 Logits 转为 0/1 判定
-    probs = 1 / (1 + np.exp(-logits))
-    predictions = (probs > 0.5).astype(int)
+
+    # 以前是 Sigmoid，现在是寻找 2 个输出中得分最大的索引 (0 或 1)
+    # logits 形状从 (batch_size, 1) 变为 (batch_size, 2)
+    predictions = np.argmax(logits, axis=-1)
 
     return {
         "f1_macro": f1_score(labels, predictions, average='macro'),
@@ -34,27 +35,37 @@ def main():
         config = yaml.safe_load(f)
     set_seed(config['train']['seed'])
 
-    # 2. 构造数据集
+    # 2. 构造数据集 (确保你已经更新了 PolarDataset.py 中的 dtype=torch.long)
     full_dataset = PolarDataset(
         data_path=config['data']['train_file'],
         tokenizer_name=config['model']['backbone'],
         max_length=config['model']['max_length']
     )
 
-    # 随机划分训练/验证集 (90/10)
     train_size = int((1 - config['data']['val_split']) * len(full_dataset))
     val_size = len(full_dataset) - train_size
     train_ds, val_ds = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
     # 3. 加载预训练模型
+    # 🚀 核心修改：num_labels 设为 2，这将自动启用 CrossEntropyLoss
     model = AutoModelForSequenceClassification.from_pretrained(
         config['model']['backbone'],
-        num_labels=1  # Subtask 1 是二分类
+        num_labels=2
     )
 
     # 4. 配置训练参数
+    # 4. 配置训练参数
     training_args = TrainingArguments(
-        output_dir=config['train']['output_dir'],
+        # 🚀 改进 1：直接存入挂载的 Google Drive，断线也不怕
+        output_dir="/content/drive/MyDrive/POLAR_Checkpoints/st1_baseline",
+
+        # 🚀 改进 2：只保留最重要的 2 个模型包（节省云盘空间，防止撑爆）
+        save_total_limit=2,
+
+        # 🚀 改进 3：增加保存频率（可选），比如每 500 步存一次
+        # save_strategy="steps",
+        # save_steps=500,
+
         num_train_epochs=config['train']['epochs'],
         per_device_train_batch_size=config['train']['batch_size'],
         per_device_eval_batch_size=config['train']['batch_size'],
@@ -62,8 +73,8 @@ def main():
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="f1_macro",  # 以 Macro F1 为准保存最佳模型
-        fp16=torch.cuda.is_available(),  # 有 GPU 自动开启混合精度加速
+        metric_for_best_model="f1_macro",
+        fp16=torch.cuda.is_available(),
         logging_dir="./logs",
         report_to="none"
     )
@@ -75,14 +86,15 @@ def main():
         train_dataset=train_ds,
         eval_dataset=val_ds,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
-    print("🚀 引擎已启动，正在微调 Subtask 1 Baseline...")
+    print("🚀 引擎已重新启动，正在以【真分类模式】微调 Subtask 1...")
     trainer.train()
 
     # 6. 持久化存储
     trainer.save_model(config['train']['output_dir'])
-    print(f"✅ 训练圆满结束！权重已保存至 {config['train']['output_dir']}")
+    print(f"✅ 训练圆满结束！修正后的权重已保存至 {config['train']['output_dir']}")
 
 
 if __name__ == "__main__":
