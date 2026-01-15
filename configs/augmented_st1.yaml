@@ -1,0 +1,15 @@
+model:
+  backbone: "xlm-roberta-base"
+  num_labels: 2
+  max_length: 256       # 🚀 增加长度以容纳文本 + 英文解释
+
+train:
+  batch_size: 8
+  learning_rate: 2e-5
+  epochs: 3
+  seed: 42
+  output_dir: "checkpoints/st1_augmented" # 建议修改输出目录区分实验
+
+data:
+  train_file: "/content/POLAR_SemEval2026/data/augmented/train_joint_augmented.jsonl"
+  val_split: 0.1

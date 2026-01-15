@@ -9,7 +9,7 @@ from transformers import (
     TrainingArguments,
     set_seed, EarlyStoppingCallback
 )
-from src.dataset.polar_dataset import PolarDataset
+from src.dataset.multitask_data_loader import PolarDataset
 
 
 def compute_metrics(eval_pred):
