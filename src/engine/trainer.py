@@ -9,6 +9,8 @@ class FGMTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.fgm_epsilon = fgm_epsilon
         self.fgm_name = fgm_name
+        # 存储扰动值，用于恢复权重
+        self.perturbations = {}
 
     def training_step(self, model, inputs):
         """
@@ -36,19 +38,24 @@ class FGMTrainer(Trainer):
         return loss.detach()
 
     def fgm_attack(self, model):
-        """沿着梯度上升方向注入扰动"""
+        """沿着梯度上升方向注入扰动，并保存扰动值"""
+        self.perturbations = {}  # 清空之前的扰动
         for name, param in model.named_parameters():
             if param.requires_grad and self.fgm_name in name and param.grad is not None:
                 norm = torch.norm(param.grad)
                 if norm != 0:
+                    # 计算扰动值
                     r_at = self.fgm_epsilon * param.grad / norm
+                    # 保存扰动值用于后续恢复
+                    self.perturbations[name] = r_at.clone()
+                    # 注入扰动
                     param.data.add_(r_at)
 
     def fgm_restore(self, model):
-        """恢复被扰动的权重"""
+        """恢复被扰动的权重：减去之前添加的扰动值"""
         for name, param in model.named_parameters():
-            if param.requires_grad and self.fgm_name in name:
-                # 实际上简单的方法是存一份备份，或者重新计算偏移，这里演示核心逻辑
-                # 更稳健的做法是在 attack 时保存扰动值
-                pass
-                # 注意：实际生产中建议使用更完整的 FGM 实现类，此处为原理演示
+            if param.requires_grad and self.fgm_name in name and name in self.perturbations:
+                # 减去之前添加的扰动值，恢复原始权重
+                param.data.sub_(self.perturbations[name])
+        # 清空扰动值，释放内存
+        self.perturbations = {}
