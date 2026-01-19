@@ -89,74 +89,6 @@ Model Bias 纠偏：若标注正确但模型误判，生成 Chain-of-Thought (Co
 - **方案 A** 倾向于形成对“翻译 Token”的**特征依赖**，导致推理阶段（脱离翻译时）性能退化。
 - **方案 B** 实现了真正的**知识蒸馏**。通过 Loss 驱动，英语的逻辑稳健性被永久固化在模型对原文处理的神经元权重中。模型学会了“在没有脚手架的情况下依然保持坐标正确”。
 
----
-
-
-
-
-
-### 📂 目录结构 (Project Structure)
-
-<pre>
-POLAR_SemEval2026/
-├── .gitignore               # 确保忽略 checkpoints/ 和 data/raw/
-├── README.md              
-├── requirements.txt         # 【需新建】列出 torch, transformers 等依赖
-├── Dockerfile               # 【需新建】用于提交的镜像环境定义
-├── main.py                  # 【重命名】建议由 train_baseline.py 改名而来
-├── get_outputs.py           # 【需新建】推理与生成结果入口
-├── check_data.py            # 已有 (可作为调试工具保留)
-│
-├── configs/                 
-│   ├── base_config.yaml     # 【需新建】全局基础配置
-│   ├── train_v1.yaml        # 【重命名】对应原 baseline_st1.yaml
-│   └── inference.yaml       # 【需新建】推理专用配置
-│
-├── data/                    
-│   ├── raw/                 # 已有
-│   ├── augmented/           # 已有 (包含 train_joint_augmented.jsonl 等)
-│   └── processed/           # 已有 (建议将 train_joint.jsonl 移入此处)
-│
-├── src/                     
-│   ├── __init__.py          # 已有
-│   ├── models/              
-│   │   ├── __init__.py      # 已有
-│   │   ├── backbone.py      # 【需新建】封装模型底座
-│   │   └── multi_task_head.py # 【需新建】多任务分类头
-│   ├── dataset/             
-│   │   ├── polar_dataset.py # 【需新建】数据加载逻辑
-│   │   └── data_collator.py # 【需新建】动态 Padding 逻辑
-│   ├── engine/              
-│   │   ├── trainer.py       # 【需新建】训练循环 (AWP/AMP)
-│   │   └── evaluator.py     # 【需新建】指标计算
-│   ├── processors/          
-│   │   ├── preprocess.py    # 已有
-│   │   └── llm_augmenter.py # 【需新建】LLM 数据增强脚本
-│   └── utils/               
-│       ├── logger.py        # 【需新建】日志工具
-│       ├── metric_utils.py  # 【需新建】多标签评价指标
-│       └── submission_tools.py # 【重命名】由 submission_task1.py 改名
-│
-├── scripts/                 
-│   ├── setup_env.sh         # 【需新建】环境安装脚本
-│   ├── run_train.sh         # 【需新建】训练启动脚本
-│   ├── run_inference.sh     # 【需新建】推理启动脚本
-│   └── subtask1_conflict.py # 已有 (临时脚本可保留)
-│
-├── checkpoints/             # 已有 (存放 .bin 或 .safetensors)
-└── logs/                    # 已有 (存放 Tensorboard 或 txt 日志)
-<pre>
-
-
-
-
-
-
-
-### 实验追踪与质量监控 (Logging & Experiment Tracking)
-
-
-
 
 
 
@@ -208,11 +140,69 @@ $$x_{adv} = x + \epsilon \cdot \frac{g}{||g||_2}$$
 
 
 
+#### 📊 Experimental Results & Analysis
+
+##### Performance vs. Reliability (Path C)
+The following visualization demonstrates the effectiveness of our **Augmented Pipeline (Path C)** compared to the baseline.
+
+![Performance vs Reliability](assets/performance_reliability_path_c.png)
+
+##### Key Observations:
+* **Metric 1 (F1 Score Enhancement)**: Our Path C configuration (utilizing FGM, Multi-Sample Dropout, and Reasoning Injection) consistently outperforms the baseline across almost all 22 languages.
+* **Metric 2 (Reliability Analysis)**: 
+    * The **Total Prob Rate (Aggregated Error Rate)** has decreased significantly (indicated by the solid red line vs. the dashed orange line).
+    * There is a notable reduction in **Tier 1 (Conflict)** and **Tier 2 (Misled)** samples, proving that Gemini Arbitration and Adversarial Training have effectively smoothed the decision boundaries.
+* **Language Specifics**: High-resource languages like `eng`, `rus`, and `deu` show near-perfect F1 scores, while low-resource or complex languages like `khm` and `ita` show the most dramatic relative improvements.
 
 
 
 
-###  `main.py`运行命令示例
+
+
+
+
+
+
+
+### 📂 目录结构 (Project Structure)
+
+<pre>
+POLAR_SemEval2026/
+├── configs/                # Experiment configurations (YAML)
+│   ├── augmented_st1.yaml  # Config for augmented training
+│   ├── baseline_st1.yaml   # Config for baseline training
+│   └── inference.yaml      # Config for production inference
+├── data/                   # Data storage
+│   ├── raw/                # Official competition datasets
+│   ├── augmented/          # Gemini-arbitrated silver labels
+│   └── processed/          # Cleaned and prepared data
+├── src/                    # Source code core
+│   ├── dataset/            # Data loading & dynamic padding
+│   │   ├── polar_dataset.py       # Core dataset logic
+│   │   └── data_collator.py       # Dynamic padding for speed
+│   ├── models/             # Architecture definitions
+│   │   ├── backbone.py            # Customized XLM-R base
+│   │   └── multi_task_head.py     # Multi-sample dropout heads
+│   ├── engine/             # Execution core
+│   │   ├── trainer.py             # FGM adversarial training engine
+│   │   └── evaluator.py           # Metrics calculation (Macro-F1)
+│   ├── processors/         # Data engineering tools
+│   │   ├── tier_audit.py          # 5-tier diagnostic system
+│   │   ├── preprocess.py         
+│   │   └── conflict_arbitrator.py # Gemini-powered LLM arbitrator
+│   └── utils/                    # Helper functions & submission tools
+│       └── submission_tools.py 
+├── main.py                 # Unified training entry point
+├── get_outputs.py          # Unified inference & packaging entry
+├── requirements.txt        # Dependency list
+└── .gitignore              # Git exclusion rules
+<pre>
+
+
+
+#### 代码运行指南
+
+#####  `main.py`运行命令示例
 
 直接在终端/命令行运行即可：
 
@@ -234,7 +224,7 @@ $$x_{adv} = x + \epsilon \cdot \frac{g}{||g||_2}$$
 
 
 
-#### get_outputs.py运行命令示例
+##### get_outputs.py运行命令示例
 
 假设你的模型保存在 `checkpoints/st1_baseline/final_model`，你可以这样运行：
 
@@ -249,11 +239,7 @@ python get_outputs.py \
 
 
 
-
-
-
-
-### tier_audit.py运行方式：
+##### tier_audit.py运行方式：
 
 你可以通过命令行直接运行这个审计逻辑，无需修改脚本源码：
 
