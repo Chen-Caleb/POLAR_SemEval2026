@@ -10,7 +10,7 @@ venv/
 .env
 
 # 竞赛核心：严禁上传到 GitHub 的目录
-data/
+data
 checkpoints/
 logs/
 

@@ -1,0 +1,19 @@
+# --- 核心深度学习框架 ---
+torch>=2.0.0
+transformers>=4.30.0
+accelerate>=0.20.0
+safetensors
+
+# --- 数据处理与配置 ---
+pandas
+numpy
+pyyaml
+scikit-learn
+
+# --- 大语言模型 (Gemini API) ---
+google-generativeai
+
+# --- 进度条与实用工具 ---
+tqdm
+pathlib
+requests

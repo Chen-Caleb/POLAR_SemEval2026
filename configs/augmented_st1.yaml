@@ -1,15 +1,35 @@
-model:
-  backbone: "xlm-roberta-base"
-  num_labels: 2
-  max_length: 256       # 🚀 增加长度以容纳文本 + 英文解释
-
-train:
-  batch_size: 8
-  learning_rate: 2e-5
-  epochs: 3
-  seed: 42
-  output_dir: "checkpoints/st1_augmented" # 建议修改输出目录区分实验
-
+# ======================== 数据配置 ========================
 data:
-  train_file: "/content/POLAR_SemEval2026/data/augmented/train_joint_augmented.jsonl"
-  val_split: 0.1
+  train_file: "data/augmented/train_joint_augmented.jsonl"  # 经过 Gemini 仲裁后的增强数据
+  val_split: 0.1                                           # 10% 作为验证集
+  task_name: "st1"
+
+# ======================== 模型配置 ========================
+model:
+  backbone: "xlm-roberta-base"                            # 底座模型
+  max_length: 256                                         # 最大长度
+  num_labels: 2                                           # 二分类
+
+  # --- 大招 1: 多重 Dropout 配置 ---
+  use_multi_dropout: true                                 # 是否开启并行 Dropout
+  num_dropout: 5                                          # 并行组数
+  dropout_prob: 0.1                                       # 丢弃概率
+
+# ======================== 训练配置 ========================
+train:
+  seed: 42
+  epochs: 10
+  batch_size: 32
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  output_dir: "checkpoints/st1_augmented_v1"
+
+  # --- 大招 2: 对抗训练 (FGM) 配置 ---
+  use_fgm: true                                           # 是否开启 FGM
+  fgm_eps: 0.5                                            # 扰动系数 (建议 0.3 - 1.0)
+
+# ======================== 推理配置 ========================
+inference:
+  batch_size: 64
+  output_dir: "outputs/results"

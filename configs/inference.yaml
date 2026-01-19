@@ -1,0 +1,12 @@
+data:
+  # 官方测试集或验证集的路径
+  test_file: "data/raw/test_subtask1.jsonl"
+  # 或者指向你处理后的 dev 文件
+  # test_file: "data/processed/dev_subtask1.jsonl"
+
+model:
+  backbone: "xlm-roberta-base"
+  max_length: 256  # 必须与训练时的长度保持一致
+
+train:
+  batch_size: 32   # 推理时的 batch_size，显存够大可以调高（如 64）

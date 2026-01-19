@@ -1,117 +1,112 @@
-import yaml
-import torch
-import argparse
-import numpy as np
 import os
+import yaml
+import argparse
+import torch
 from pathlib import Path
-from sklearn.metrics import f1_score, accuracy_score
-from transformers import (
-    AutoModelForSequenceClassification,
-    Trainer,
-    TrainingArguments,
-    set_seed,
-    EarlyStoppingCallback
-)
-# 统一使用你最新的多任务数据集类
-from src.dataset.multitask_data_loader import MultitaskPolarDataset
+from transformers import TrainingArguments, set_seed, EarlyStoppingCallback, AutoTokenizer
+
+# 1. 导入已拆分并优化的模块
+from src.dataset.polar_dataset import MultitaskPolarDataset
+from src.dataset.data_collator import get_polar_collator
+from src.models.backbone import XLMRobertaForPolarization
+from src.engine.trainer import FGMTrainer
+from src.engine.evaluator import compute_metrics
 
 
-def compute_metrics(eval_pred):
-    """通用二分类指标计算"""
-    logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=-1)
-    return {
-        "f1_macro": f1_score(labels, predictions, average='macro'),
-        "accuracy": accuracy_score(labels, predictions)
-    }
+def parse_args():
+    parser = argparse.ArgumentParser(description="POLAR SemEval 2026 Training Pipeline")
+    parser.add_argument("--config", type=str, required=True, help="YAML 配置文件路径")
+    parser.add_argument("--task", type=str, default="st1", choices=["st1", "st2", "st3"], help="子任务名称")
+    return parser.parse_args()
 
 
 def main():
-    # --- 1. 命令行参数解析 ---
-    parser = argparse.ArgumentParser(description="POLAR SemEval 2026 Training Entry")
-    parser.add_argument("--config", type=str, required=True,
-                        help="Path to the config file (e.g., configs/augmented_st1.yaml)")
-    parser.add_argument("--task", type=str, default="st1", help="Task name: st1, st2, or st3")
-    args = parser.parse_args()
-
-    # --- 2. 加载指定配置 ---
-    if not os.path.exists(args.config):
-        raise FileNotFoundError(f"❌ 找不到配置文件: {args.config}")
-
+    # --- 阶段 A: 环境与配置准备 ---
+    args = parse_args()
     with open(args.config, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    # 设置随机种子
+    # 设置随机种子保证实验可复现
     set_seed(config['train'].get('seed', 42))
-    print(f"🚀 已加载配置: {args.config} | 任务: {args.task}")
 
-    # --- 3. 构造数据集 ---
-    # 这里统一使用 MultitaskPolarDataset，通过 args.task 切换任务
+    # 确定输出目录并自动创建
+    output_dir = Path(config['train']['output_dir'])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- 阶段 B: 数据流水线 (Dataset + Collator) ---
+    print(f"📂 正在加载数据任务: {args.task.upper()}")
+
+    # 实例化支持推理注入和 K-Fold 的 Dataset
     full_dataset = MultitaskPolarDataset(
         data_path=config['data']['train_file'],
         tokenizer_name=config['model']['backbone'],
-        max_length=config['model']['max_length'],
+        max_length=config['model'].get('max_length', 256),
         task=args.task
     )
 
-    # 划分训练集和验证集
-    train_size = int((1 - config['data']['val_split']) * len(full_dataset))
-    val_size = len(full_dataset) - train_size
+    # 验证集切分
+    val_split = config['data'].get('val_split', 0.1)
+    train_size = int((1 - val_split) * len(full_dataset))
+    train_ds, val_ds = torch.utils.data.random_split(full_dataset, [train_size, len(full_dataset) - train_size])
 
-    train_ds, val_ds = torch.utils.data.random_split(
-        full_dataset,
-        [train_size, val_size],
-        generator=torch.Generator().manual_seed(config['train'].get('seed', 42))
+    # 🚀 改进 1: 引入动态填充 (Dynamic Padding)
+    # 不再在 Dataset 里强制 padding 到最大长度，而是按 Batch 动态对齐
+    tokenizer = AutoTokenizer.from_pretrained(config['model']['backbone'])
+    data_collator = get_polar_collator(tokenizer)
+
+    # --- 阶段 C: 模型组装 (Backbone + Multi-Sample Dropout) ---
+    # 🚀 改进 2: 接入自定义模型底座
+    # 使用集成 5 组并行 Dropout 的定制模型，而非原生分类模型
+    print(f"🧠 正在组装自定义模型 (底座: {config['model']['backbone']})")
+    model = XLMRobertaForPolarization(
+        model_name=config['model']['backbone'],
+        num_labels=config['model'].get('num_labels', 2),
+        use_multi_dropout=config['model'].get('use_multi_dropout', True),
+        num_dropout=config['model'].get('num_dropout', 5)
     )
-    print(f"📊 数据就绪: 训练集 {len(train_ds)}, 验证集 {len(val_ds)}")
 
-    # --- 4. 加载模型 ---
-    model = AutoModelForSequenceClassification.from_pretrained(
-        config['model']['backbone'],
-        num_labels=config['model'].get('num_labels', 2)
-    )
-
-    # --- 5. 定义训练参数 ---
-    # 这里的 output_dir 会根据配置文件自动切换路径
+    # --- 阶段 D: 训练参数与引擎设定 ---
     training_args = TrainingArguments(
-        output_dir=config['train']['output_dir'],
+        output_dir=str(output_dir),
         num_train_epochs=config['train']['epochs'],
         per_device_train_batch_size=config['train']['batch_size'],
         per_device_eval_batch_size=config['train']['batch_size'],
         learning_rate=float(config['train']['learning_rate']),
-
-        # 策略设置
-        eval_strategy="epoch",
+        weight_decay=config['train'].get('weight_decay', 0.01),
+        evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="f1_macro",
-        save_total_limit=2,  # 限制保存数量，防止磁盘满
-
-        # 硬件优化
-        fp16=torch.cuda.is_available(),
-        report_to="none",
-        logging_dir="./logs"
+        fp16=torch.cuda.is_available(),  # 自动检测并开启混合精度
+        save_total_limit=2,  # 仅保留最近 2 个检查点，节省磁盘
+        report_to="none"
     )
 
-    # --- 6. 实例化 Trainer ---
-    trainer = Trainer(
+    # 🚀 改进 3: 配置 FGM 对抗训练开关
+    # 只有当 YAML 中设置 use_fgm 为 True 时才激活扰动
+    use_fgm = config['train'].get('use_fgm', True)
+    fgm_eps = config['train'].get('fgm_eps', 0.5) if use_fgm else 0.0
+
+    trainer = FGMTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]  # 增加早停保护
+        data_collator=data_collator,  # 传入动态填充器
+        compute_metrics=compute_metrics,  # 统一评价指标
+        fgm_epsilon=fgm_eps,  # 对抗扰动系数
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
-    # --- 7. 执行训练 ---
-    print(f"🔥 正在启动训练，输出目录: {config['train']['output_dir']}")
+    # --- 阶段 E: 执行训练 ---
+    print(f"🔥 训练启动！对抗扰动: {'开启 (eps=' + str(fgm_eps) + ')' if use_fgm else '关闭'}")
     trainer.train()
 
-    # --- 8. 最终保存 ---
-    final_save_path = Path(config['train']['output_dir']) / "final_model"
+    # 最终模型保存，确保 get_outputs.py 可以直接读取
+    final_save_path = output_dir / "final_model"
     trainer.save_model(final_save_path)
-    full_dataset.tokenizer.save_pretrained(final_save_path)
-    print(f"✅ 任务完成！权重已导出至: {final_save_path}")
+    tokenizer.save_pretrained(final_save_path)
+    print(f"✅ 训练完成，模型保存至: {final_save_path}")
 
 
 if __name__ == "__main__":
