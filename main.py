@@ -10,7 +10,7 @@ from src.dataset.polar_dataset import MultitaskPolarDataset
 from src.dataset.data_collator import get_polar_collator
 from src.models.backbone import XLMRobertaForPolarization
 from src.engine.trainer import FGMTrainer
-from src.engine.evaluator import compute_metrics
+from src.engine.evaluator import get_compute_metrics_fn
 
 
 def parse_args():
@@ -57,12 +57,14 @@ def main():
     # --- 阶段 C: 模型组装 (Backbone + Multi-Sample Dropout) ---
     # 🚀 改进 2: 接入自定义模型底座
     # 使用集成 5 组并行 Dropout 的定制模型，而非原生分类模型
-    print(f"🧠 正在组装自定义模型 (底座: {config['model']['backbone']})")
+    print(f"🧠 正在组装自定义模型 (底座: {config['model']['backbone']}, 任务: {args.task.upper()})")
     model = XLMRobertaForPolarization(
         model_name=config['model']['backbone'],
         num_labels=config['model'].get('num_labels', 2),
+        task=args.task,  # 传递任务类型以选择正确的损失函数
         use_multi_dropout=config['model'].get('use_multi_dropout', True),
-        num_dropout=config['model'].get('num_dropout', 5)
+        num_dropout=config['model'].get('num_dropout', 5),
+        dropout_prob=config['model'].get('dropout_prob', 0.1)
     )
 
     # --- 阶段 D: 训练参数与引擎设定 ---
@@ -87,13 +89,16 @@ def main():
     use_fgm = config['train'].get('use_fgm', True)
     fgm_eps = config['train'].get('fgm_eps', 0.5) if use_fgm else 0.0
 
+    # 根据任务类型获取对应的评估函数
+    compute_metrics_fn = get_compute_metrics_fn(task=args.task)
+    
     trainer = FGMTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         data_collator=data_collator,  # 传入动态填充器
-        compute_metrics=compute_metrics,  # 统一评价指标
+        compute_metrics=compute_metrics_fn,  # 根据任务类型选择评价指标
         fgm_epsilon=fgm_eps,  # 对抗扰动系数
         callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
