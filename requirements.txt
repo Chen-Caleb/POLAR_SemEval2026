@@ -17,3 +17,6 @@ google-generativeai
 tqdm
 pathlib
 requests
+
+# --- 可视化工具 ---
+matplotlib>=3.5.0
