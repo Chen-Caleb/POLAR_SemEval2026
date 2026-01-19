@@ -1,115 +1,104 @@
+import os
+import yaml
+import torch
+import argparse
 import pandas as pd
 import numpy as np
-import torch
-import json
-import os
+from pathlib import Path
 from tqdm import tqdm
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
-# from google.colab import drive
 
-# ================= 1. 环境与 Drive 路径配置 =================
-
-BASE_DIR = "/content/POLAR_SemEval2026"
-MODEL_PATH = "/content/POLAR_SemEval2026/checkpoints/ST1_baseline"
-TRAIN_DATA_PATH = "data/processed/train_joint.jsonl"
-
-# 自动创建审计结果文件夹
-OUTPUT_DIR = os.path.join(BASE_DIR, "DeepAudit_Results")
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-    print(f"📂 已创建新文件夹: {OUTPUT_DIR}")
-
-BATCH_SIZE = 64
-MAX_LENGTH = 128
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# 🚀 导入项目统一的组件
+from src.dataset.polar_dataset import MultitaskPolarDataset
+from src.engine.evaluator import compute_metrics
 
 
-# =====================================================
-
-class PolarDataset(Dataset):
-    def __init__(self, file_path, tokenizer, max_length):
-        self.data = []
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                self.data.append(json.loads(line))
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        encoding = self.tokenizer(item['text'], truncation=True, padding='max_length',
-                                  max_length=self.max_length, return_tensors='pt')
-
-        # 对应 ST1 任务，你的键名是 label_st1
-        label = item.get('label_st1', None)
-        if label is None:
-            raise KeyError(f"数据 ID {item.get('id')} 中找不到 'label_st1'。")
-
-        return {
-            'id': item['id'],
-            'text': item['text'],
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
-            'label': int(label)
-        }
+def parse_args():
+    parser = argparse.ArgumentParser(description="POLAR Tier Audit System")
+    parser.add_argument("--config", type=str, default="configs/augmented_st1.yaml", help="配置文件路径")
+    parser.add_argument("--checkpoint", type=str, required=True, help="训练好的模型路径 (checkpoint)")
+    parser.add_argument("--task", type=str, default="st1", help="审计的任务 (st1/st2/st3)")
+    parser.add_argument("--batch_size", type=int, default=64)
+    return parser.parse_args()
 
 
 def run_tier_audit():
-    print(f"📦 正在加载模型: {MODEL_PATH}")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, fix_mistral_regex=True)
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH).to(DEVICE)
+    args = parse_args()
+
+    # 1. 环境与配置加载
+    with open(args.config, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # 统一输出路径到项目根目录下的 DeepAudit_Results
+    output_dir = Path("DeepAudit_Results")
+    output_dir.mkdir(exist_ok=True)
+
+    # 2. 加载模型与分词器 (从指定的 checkpoint 加载)
+    print(f"📦 正在加载受检模型: {args.checkpoint}")
+    tokenizer = AutoTokenizer.from_pretrained(args.checkpoint)
+    model = AutoModelForSequenceClassification.from_pretrained(args.checkpoint).to(device)
     model.eval()
 
-    dataset = PolarDataset(TRAIN_DATA_PATH, tokenizer, MAX_LENGTH)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
+    # 3. 加载数据集 (使用统一的 MultitaskPolarDataset 保证推理注入逻辑一致)
+    dataset = MultitaskPolarDataset(
+        data_path=config['data']['train_file'],
+        tokenizer_name=args.checkpoint,
+        max_length=config['model'].get('max_length', 256),
+        task=args.task,
+        is_test=False  # 需要加载标签进行对比
+    )
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     results = []
     print(f"🔍 启动五层审计：正在扫描 {len(dataset)} 条样本...")
 
     with torch.no_grad():
         for batch in tqdm(dataloader):
-            input_ids, mask = batch['input_ids'].to(DEVICE), batch['attention_mask'].to(DEVICE)
+            input_ids = batch['input_ids'].to(device)
+            mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
             outputs = model(input_ids, attention_mask=mask)
             probs = torch.softmax(outputs.logits, dim=1)
             preds = torch.argmax(probs, dim=1).cpu().numpy()
             confs = torch.max(probs, dim=1).values.cpu().numpy()
 
             for i in range(len(batch['id'])):
+                # 注意：从 dataset 原始列表获取 text 以保证对应
                 results.append({
                     'id': batch['id'][i],
                     'lang': str(batch['id'][i]).split('_')[0],
-                    'text': batch['text'][i],
-                    'label': batch['label'][i].item(),
+                    'text': dataset.data[i]['text'],
+                    'label': labels[i].item(),
                     'pred': preds[i],
                     'conf': confs[i],
-                    'is_correct': batch['label'][i].item() == preds[i]
+                    'is_correct': labels[i].item() == preds[i]
                 })
 
     df = pd.DataFrame(results)
 
-    # --- 2. 五层诊断分流逻辑 ---
+    # --- 2. 五层诊断分流逻辑 (保留原始逻辑) ---
     t1_mask = (~df['is_correct']) & (df['conf'] > 0.90)  # Conflict
     t2_mask = (~df['is_correct']) & (df['conf'] > 0.70) & (df['conf'] <= 0.90)  # Misled
     t3_mask = (~df['is_correct']) & (df['conf'] <= 0.70)  # Confusion
     t4_mask = (df['is_correct']) & (df['conf'] <= 0.70)  # Unstable Corrects
 
-    # 导出时删除 is_correct 列 (根据你的要求)
     def save_clean_csv(mask, filename):
         sub_df = df[mask].drop(columns=['is_correct'])
-        sub_df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False)
+        sub_df.to_csv(output_dir / filename, index=False)
+        return len(sub_df)
 
-    print(f"💾 正在将分层错题本自动保存至 Google Drive...")
-    save_clean_csv(t1_mask, 'ST1_Conflict_T1.csv')
-    save_clean_csv(t2_mask, 'ST1_Misled_T2.csv')
-    save_clean_csv(t3_mask, 'ST1_Confusion_T3.csv')
-    save_clean_csv(t4_mask, 'ST1_Unstable_Corrects.csv')
+    print(f"💾 正在保存分层错题本至: {output_dir}")
+    q1_count = save_clean_csv(t1_mask, f'{args.task}_Conflict_T1.csv')
+    save_clean_csv(t2_mask, f'{args.task}_Misled_T2.csv')
+    save_clean_csv(t3_mask, f'{args.task}_Confusion_T3.csv')
+    save_clean_csv(t4_mask, f'{args.task}_Unstable_Corrects.csv')
 
-    # --- 3. 生成语种多维透视报告 ---
+    # --- 3. 生成语种多维透视报告 (保留原始逻辑) ---
     print("\n📊 正在生成审计分析报告...")
     report = []
     for lang, group in df.groupby('lang'):
@@ -162,14 +151,13 @@ def run_tier_audit():
     }])
 
     final_report = pd.concat([report_df, avg_row], ignore_index=True)
-    final_report.to_csv(os.path.join(OUTPUT_DIR, 'TRAIN_Tier_Audit_Report.csv'), index=False)
+    final_report.to_csv(output_dir / f'TRAIN_{args.task}_Audit_Report.csv', index=False)
 
     print("\n" + "=" * 130)
-    # 打印最核心的五个列
     disp_cols = ['Language', 'Macro_F1', 'F1_Binary_P', 'Total_Prob_Rate', 'T2_Misled_Rate', 'Unstable_Rate']
     print(final_report[disp_cols].to_string(index=False))
     print("=" * 130)
-    print(f"🎉 任务完成！已过滤掉稳定样本，其余四类错题本已存入 Drive。")
+    print(f"🎉 审计完成！共发现 {q1_count} 个 Tier 1 冲突样本。结果已存入 {output_dir}")
 
 
 if __name__ == "__main__":
