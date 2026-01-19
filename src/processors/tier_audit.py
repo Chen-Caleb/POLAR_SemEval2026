@@ -55,9 +55,12 @@ def run_tier_audit():
 
     results = []
     print(f"🔍 启动五层审计：正在扫描 {len(dataset)} 条样本...")
+    
+    # 使用 enumerate 跟踪全局索引
+    global_idx = 0
 
     with torch.no_grad():
-        for batch in tqdm(dataloader):
+        for batch_idx, batch in enumerate(tqdm(dataloader)):
             input_ids = batch['input_ids'].to(device)
             mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
@@ -67,17 +70,40 @@ def run_tier_audit():
             preds = torch.argmax(probs, dim=1).cpu().numpy()
             confs = torch.max(probs, dim=1).values.cpu().numpy()
 
-            for i in range(len(batch['id'])):
-                # 注意：从 dataset 原始列表获取 text 以保证对应
+            batch_size = len(labels)
+            
+            # 正确处理 batch 内的每个样本
+            for i in range(batch_size):
+                # 计算全局索引
+                current_global_idx = global_idx + i
+                
+                # 从 dataset 中获取原始数据
+                if current_global_idx < len(dataset.data):
+                    item = dataset.data[current_global_idx]
+                    raw_item = item if dataset.is_test else item.get("raw_item", item)
+                    
+                    # 提取 id 和 text
+                    sample_id = raw_item.get("id", f"unknown_{current_global_idx}")
+                    text = raw_item.get("text", "")
+                    lang = raw_item.get("lang", str(sample_id).split('_')[0] if '_' in str(sample_id) else "unknown")
+                else:
+                    # 防御性编程：如果索引超出范围
+                    sample_id = f"unknown_{current_global_idx}"
+                    text = ""
+                    lang = "unknown"
+                
                 results.append({
-                    'id': batch['id'][i],
-                    'lang': str(batch['id'][i]).split('_')[0],
-                    'text': dataset.data[i]['text'],
+                    'id': sample_id,
+                    'lang': lang,
+                    'text': text,
                     'label': labels[i].item(),
                     'pred': preds[i],
                     'conf': confs[i],
                     'is_correct': labels[i].item() == preds[i]
                 })
+            
+            # 更新全局索引
+            global_idx += batch_size
 
     df = pd.DataFrame(results)
 
