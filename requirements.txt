@@ -1,22 +1,22 @@
-# --- 核心深度学习框架 ---
+# --- Core deep learning stack ---
 torch>=2.0.0
 transformers>=4.30.0
 accelerate>=0.20.0
 safetensors
 
-# --- 数据处理与配置 ---
+# --- Data processing & configuration ---
 pandas
 numpy
 pyyaml
 scikit-learn
 
-# --- 大语言模型 (Gemini API) ---
+# --- Large language model (Gemini API) ---
 google-generativeai
 
-# --- 进度条与实用工具 ---
+# --- Progress bar & utilities ---
 tqdm
 pathlib
 requests
 
-# --- 可视化工具 ---
+# --- Visualization ---
 matplotlib>=3.5.0

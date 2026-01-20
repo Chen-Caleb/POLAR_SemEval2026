@@ -2,27 +2,27 @@ import json
 from collections import Counter
 import os
 
-# 1. 定义数据路径
+# 1. Define data path
 data_path = 'data/processed/train_joint.jsonl'
 
 
 def run_statistics():
     if not os.path.exists(data_path):
-        print(f"❌ 错误：在当前目录下找不到文件 {data_path}")
-        print("请确保你在 POLAR_SemEval2026 文件夹内运行此脚本。")
+        print(f"❌ Error: cannot find file {data_path} in current directory.")
+        print("Please make sure you run this script from the POLAR_SemEval2026 project root.")
         return
 
     labels = []
     total_count = 0
     error_count = 0
 
-    print("🚀 正在扫描 7.3 万条数据，请稍候...")
+    print("🚀 Scanning ~73k samples, please wait...")
 
     with open(data_path, 'r', encoding='utf-8') as f:
         for i, line in enumerate(f):
             try:
                 item = json.loads(line)
-                # 核心修正：使用 label_st1 键名
+                # Core fix: use label_st1 as the binary label key
                 label = item.get('label_st1')
 
                 if label is not None:
@@ -30,42 +30,42 @@ def run_statistics():
                 else:
                     error_count += 1
                 total_count += 1
-            except Exception as e:
+            except Exception:
                 error_count += 1
                 continue
 
-    # 2. 计算统计数据
+    # 2. Compute statistics
     counts = Counter(labels)
 
     print("\n" + "=" * 40)
-    print("📊 POLAR Subtask 1 数据分布报告")
+    print("📊 POLAR Subtask 1 Data Distribution Report")
     print("=" * 40)
-    print(f"✅ 读取总行数: {total_count}")
-    print(f"⚠️ 无效/缺失行: {error_count}")
+    print(f"✅ Total lines read: {total_count}")
+    print(f"⚠️ Invalid / missing lines: {error_count}")
     print("-" * 40)
 
     if labels:
         for label, count in sorted(counts.items()):
             percentage = (count / len(labels)) * 100
-            label_name = "极化 (1)" if label == 1 else "非极化 (0)"
-            print(f"📍 {label_name}: {count:6d} 条 | 占比: {percentage:6.2f}%")
+            label_name = "Polarized (1)" if label == 1 else "Non-polarized (0)"
+            print(f"📍 {label_name}: {count:6d} samples | Ratio: {percentage:6.2f}%")
 
-        # 3. 计算比例诊断
+        # 3. Ratio diagnosis
         num_0 = counts.get(0, 0)
         num_1 = counts.get(1, 0)
         if num_1 > 0:
             ratio = num_0 / num_1
             print("-" * 40)
-            print(f"💡 类别比例 (0:1) 为: {ratio:.2f} : 1")
+            print(f"💡 Class ratio (0:1) = {ratio:.2f} : 1")
 
             if ratio > 2.0:
-                print("\n🚨 诊断结果：存在严重【类别不平衡】！")
-                print(f"模型目前只需猜 0 就能获得 {(num_0 / total_count) * 100 :.1f}% 的准确率。")
-                print("这就是为什么你的 F1 Macro 只有 0.35 的根本原因。")
+                print("\n🚨 Diagnosis: severe class imbalance detected.")
+                print(f"The model could achieve {(num_0 / total_count) * 100 :.1f}% accuracy by predicting all zeros.")
+                print("This explains why the F1 Macro is stuck around 0.35.")
             else:
-                print("\n✅ 诊断结果：数据相对平衡。")
+                print("\n✅ Diagnosis: data is relatively balanced.")
     else:
-        print("❌ 未能提取到任何有效标签，请检查文件格式。")
+        print("❌ No valid labels extracted; please check file format.")
     print("=" * 40 + "\n")
 
 

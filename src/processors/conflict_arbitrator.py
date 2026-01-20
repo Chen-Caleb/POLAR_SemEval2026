@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 1. 配置与全英文 Prompt 模板
+# 1. Configuration and English-only prompt template
 # ==========================================
 MODEL_NAME = "gemini-2.5-flash"
 
@@ -31,7 +31,7 @@ Arbitrate "Tier 1 Conflicts" between "Human Labels" and "Model Predictions" for 
 
 # Reasoning Requirements
 Analyze the text based on the linguistic habits of {lang}. 
-Identify hidden intents like sarcasm, irony, or phonetic slurs (e.g., "黑乐色" in Chinese).
+Identify hidden intents like sarcasm, irony, or phonetic slurs (e.g., abusive phonetic wordplay in Chinese).
 The analysis MUST be in English regardless of the input text language.
 
 # Output Format (Strict JSON, MUST be in English, Max 150 words)
@@ -44,14 +44,14 @@ The analysis MUST be in English regardless of the input text language.
 
 
 # ==========================================
-# 2. 核心调用逻辑
+# 2. Core API call logic
 # ==========================================
 def get_client():
     return genai.Client(api_key=userdata.get('GEMINI_API_KEY'))
 
 
 def arbitrate_sample(client, row):
-    """调用 API 处理单条数据并返回解析后的 JSON"""
+    """Call the API on a single sample and return parsed JSON."""
     prompt = PROMPT_TEMPLATE.format(
         lang=row['lang'],
         text=row['text'],
@@ -74,68 +74,68 @@ def arbitrate_sample(client, row):
 
 
 # ==========================================
-# 3. 多线程并行处理流水线
+# 3. Multithreaded processing pipeline
 # ==========================================
 def run_pipeline_fast(input_file, output_file, max_workers=5, limit=None):
-    # 读取 CSV (增加容错处理)
+    # Read CSV with robust error handling
     try:
         df = pd.read_csv(
             input_file,
-            on_bad_lines='skip',  # 跳过格式有问题的行
+            on_bad_lines='skip',  # Skip malformed lines
             quoting=csv.QUOTE_MINIMAL,
             escapechar='\\'
         )
     except Exception as e:
-        print(f"❌ 读取 CSV 失败: {e}")
+        print(f"❌ Failed to read CSV: {e}")
         return
 
     if limit:
         df = df.head(limit)
 
     client = get_client()
-    print(f"🚀 启动并行处理 (线程数: {max_workers})")
-    print(f"目标文件: {input_file}，预计处理 {len(df)} 条数据...")
-
-    # 使用线程池并发执行
+    print(f"🚀 Starting parallel processing (workers: {max_workers})")
+    print(f"Input file: {input_file}, total rows to process: {len(df)}")
+    
+    # Execute in parallel with a thread pool
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 建立任务映射
         future_to_row = {executor.submit(arbitrate_sample, client, row): row for _, row in df.iterrows()}
 
         with open(output_file, "w", encoding="utf-8") as f:
-            # as_completed 保证谁先跑完谁先写入
+            # as_completed ensures results are written as soon as they are ready
             for future in tqdm(as_completed(future_to_row), total=len(df)):
                 row = future_to_row[future]
                 try:
                     res = future.result()
 
                     if "error" in res:
-                        # 如果是频率限制报错，建议在这里增加 time.sleep 或降低 max_workers
+                        # For rate limit errors, consider adding sleep or reducing max_workers
                         continue
 
-                    # 构造最终数据条目
+                    # Build final JSONL entry
                     entry = {
                         "id": row['id'],
                         "lang": row['lang'],
                         "text": row['text'],
                         "final_label": res.get('final_label'),
                         "category": res.get('category'),
-                        "analysis": res.get('analysis')  # 确保字段名与 Prompt 一致
+                        "analysis": res.get('analysis')  # Keep field name aligned with prompt
                     }
 
-                    # 实时写入 JSONL
+                    # Write JSONL entry immediately
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 except Exception as e:
-                    print(f"处理 ID {row.get('id')} 时发生异常: {e}")
+                    print(f"Exception while processing ID {row.get('id')}: {e}")
 
-    print(f"\n✅ 处理完成！结果保存至: {output_file}")
+    print(f"\n✅ Processing complete. Results saved to: {output_file}")
 
 
 # ==========================================
-# 4. 运行入口
+# 4. Entry point
 # ==========================================
 
-# 如果你使用的是免费版 API (Free Tier)，建议 max_workers 设为 2 或 3
-# 如果你使用的是付费版 API (Pay-as-you-go)，可以设为 10-20 以极速处理
+# For free-tier API keys, consider using max_workers=2 or 3.
+# For paid API keys, max_workers=10-20 can significantly speed up processing.
 run_pipeline_fast(
     input_file="ST1_Conflict_test.csv",
     output_file="Tier1_Test_Results.jsonl",

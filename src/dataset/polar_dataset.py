@@ -8,26 +8,30 @@ from pathlib import Path
 
 class MultitaskPolarDataset(Dataset):
     """
-    极化检测多任务数据集类
-    支持特性：推理注入 (Reasoning Injection)、K-Fold 索引切分、测试模式
+    Multitask dataset for polarization detection.
+
+    Features:
+    - Reasoning injection (Reasoning Injection)
+    - K-Fold index-based splitting
+    - Test/inference mode without labels
     """
 
     def __init__(self, data_path, tokenizer_name, max_length=256, task="st1", is_test=False, indices=None):
-        self.all_data = []  # 原始全量数据
-        self.data = []  # 最终加载的数据
+        self.all_data = []  # Raw full dataset
+        self.data = []  # Final filtered dataset
         self.task = task.lower()
         self.is_test = is_test
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.max_length = max_length
 
-        # 1. 路径自动解析
+        # 1. Resolve data path
         current_path = Path(os.getcwd())
         absolute_path = Path(data_path) if Path(data_path).is_absolute() else current_path / data_path
 
         if not absolute_path.exists():
-            raise FileNotFoundError(f"❌ 找不到数据文件: {absolute_path}")
+            raise FileNotFoundError(f"❌ Data file not found: {absolute_path}")
 
-        # 2. 数据加载与标签过滤
+        # 2. Load data and filter by label
         with open(absolute_path, 'r', encoding='utf-8') as f:
             raw_list = [json.loads(line) for line in f if line.strip()]
 
@@ -37,24 +41,24 @@ class MultitaskPolarDataset(Dataset):
             else:
                 label = self._extract_label(item)
                 if label is not None:
-                    # 仅加载有标签且符合逻辑的数据
+                    # Only keep samples with valid labels
                     self.all_data.append({"raw_item": item, "label": label})
 
-        # 3. K-Fold 索引切分
+        # 3. K-Fold index-based splitting (optional)
         if indices is not None:
             self.data = [self.all_data[i] for i in indices if i < len(self.all_data)]
         else:
             self.data = self.all_data
 
-        print(f"✅ {self.task.upper()} [{'TEST' if is_test else 'TRAIN'}] 加载完成！样本数: {len(self.data)}")
+        print(f"✅ {self.task.upper()} [{'TEST' if is_test else 'TRAIN'}] dataset loaded. Samples: {len(self.data)}")
 
     def _extract_label(self, item):
-        """核心逻辑：根据不同任务提取标签"""
+        """Core logic: extract labels according to task type."""
         if self.task == "st1":
             l = item.get("label_st1")
             return l if l in [0, 1] else None
         elif self.task == "st2":
-            # 只有极化的样本才参与 ST2/ST3 训练
+            # Only polarized samples (label_st1 == 1) are used for ST2/ST3
             return item.get("label_st2") if item.get("label_st1") == 1 else None
         elif self.task == "st3":
             return item.get("label_st3") if item.get("label_st1") == 1 else None
